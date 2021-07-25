@@ -13,32 +13,6 @@ import traceback
 Example json config
 {
   "operators": {
-    "doggo": {
-    },
-    "speargal": {
-    },
-    "mastermei": {
-    },
-    "ke": {
-    },
-    "neng": {
-    },
-    "fragrant": {
-    },
-    "migrru": {
-    },
-    "ola": {
-    },
-    "masterla": {
-    },
-    "laser": {
-    },
-    "snow": {
-    },
-    "z2": {
-    },
-    "sheep": {
-    },
     "lumberjack": {
       "consume": true
     },
@@ -135,21 +109,78 @@ class GameMap:
     unit = (b - a) * 1.0 / self.grid['num_columns']
     return a + unit * (n + 0.5)
 
+  @staticmethod
+  def _portion(a, b, l, L):
+    return (a * (L - l) + b * l) / L
+
   def _row_frac(self, a, b, n):
     row_edges = self.grid['row_edges']
     L = row_edges[-1] - row_edges[0]
     l = row_edges[n] - row_edges[0]
     l += (row_edges[n+1] - row_edges[n]) * 0.5
-    return (a * (L - l) + b * l) / L
+    return GameMap._portion(a, b, l, L)
 
   def grid_to_coordinates(self, row, col):
     tx = self._column_frac(self.grid['topleft_x'], self.grid['topright_x'], col)
     bx = self._column_frac(self.grid['bottomleft_x'], self.grid['bottomright_x'], col)
     x = self._row_frac(tx, bx, row)
     y = self._row_frac(self.grid['row_edges'][0], self.grid['row_edges'][-1], row)
-    print(row, col)
-    print(tx, bx, x, y)
     return int(x), int(y)
+
+  @staticmethod
+  def skew_line(x1, y1, x2, y2):
+    a = y2 - y1
+    b = x1 - x2
+    c = a * x1 + b * y1
+    return a * 1.0, b * 1.0, c * 1.0
+
+  @staticmethod
+  def skew_line_cross_point(x1, y1, x2, y2, x3, y3, x4, y4):
+    a1, b1, c1 = GameMap.skew_line(x1, y1, x2, y2)
+    a2, b2, c2 = GameMap.skew_line(x3, y3, x4, y4)
+    x = (b2 * c1 - b1 * c2) / (a1 * b2 - a2 * b1)
+    y = (a2 * c1 - a1 * c2) / (a2 * b1 - a1 * b2)
+    return int(x), int(y)
+
+  def distorted_edge_cross(self, row, col):
+    distorted_top_cross_xs = self.grid['distorted_top_cross_xs']
+    assert(len(distorted_top_cross_xs) == self.grid['num_columns'] + 1)
+    distorted_bottom_cross_xs = self.grid['distorted_bottom_cross_xs']
+    assert(len(distorted_bottom_cross_xs) == self.grid['num_columns'] + 1)
+    distorted_left_cross_ys = self.grid['distorted_left_cross_ys']
+    distorted_right_cross_ys = self.grid['distorted_right_cross_ys']
+
+    # row edge, left point
+    x1 = GameMap._portion(distorted_top_cross_xs[0], distorted_bottom_cross_xs[0],
+                          distorted_left_cross_ys[row] - distorted_left_cross_ys[0],
+                          distorted_left_cross_ys[-1] - distorted_left_cross_ys[0])
+    y1 = distorted_left_cross_ys[row]
+    # row edge, right point
+    x2 = GameMap._portion(distorted_top_cross_xs[-1], distorted_bottom_cross_xs[-1],
+                          distorted_right_cross_ys[row] - distorted_right_cross_ys[0],
+                          distorted_right_cross_ys[-1] - distorted_right_cross_ys[0])
+    y2 = distorted_right_cross_ys[row]
+
+    # column edge, top point
+    x3 = distorted_top_cross_xs[col]
+    y3 = GameMap._portion(distorted_left_cross_ys[0], distorted_right_cross_ys[0],
+                          distorted_top_cross_xs[col] - distorted_top_cross_xs[0],
+                          distorted_top_cross_xs[-1] - distorted_top_cross_xs[0])
+    # column edge, bottom point
+    x4 = distorted_bottom_cross_xs[col]
+    y4 = GameMap._portion(distorted_left_cross_ys[-1], distorted_right_cross_ys[-1],
+                          distorted_bottom_cross_xs[col] - distorted_bottom_cross_xs[0],
+                          distorted_bottom_cross_xs[-1] - distorted_bottom_cross_xs[0])
+
+    X1, Y1 = GameMap.skew_line_cross_point(x1, y1, x2, y2, x3, y3, x4, y4)
+    return X1, Y1
+
+  def distorted_grid_to_coordinates(self, row, col):
+    X1, Y1 = self.distorted_edge_cross(row, col)
+    X2, Y2 = self.distorted_edge_cross(row+1, col+1)
+    X = (X1 + X2) / 2
+    Y = (Y1 + Y2) / 2
+    return X, Y
 
   def panel_to_coordinates(self, idx, available):
     max_panel_width = self.grid['max_panel_width']
@@ -159,7 +190,6 @@ class GameMap:
       panel_width = screen_width * 1.0 / available
     x = screen_width - (available - idx - 0.5) * panel_width
     y = self.grid['height'] - panel_width * 0.5
-    print(idx, available)
     return int(x), int(y)
 
 class Level:
@@ -169,12 +199,13 @@ class Level:
     GRID = 3
     PLAY = 4
 
-  def __init__(self, config):
-    self.config = config
+  def __init__(self, args):
+    with open(args.config_path) as fd:
+      self.config = json.load(fd)
     self.state = Level.State.INIT
 
     self.grid = None
-    self.operators_in_use = OrderedDict()
+    self.operators_in_use = None
 
     self.start_time_ms = None
     self.paused = True
@@ -252,11 +283,11 @@ class Level:
         log("strange command: {}".format(line))
         return
     except KeyboardInterrupt as e:
-      print(e)
+      log(e)
       traceback.print_tb(e.__traceback__)
       sys.exit(0)
     except Exception as e:
-      print(e)
+      log(e)
       traceback.print_tb(e.__traceback__)
       log("error with line: {}".format(line))
       self.may_pause_again(was_paused)
@@ -277,14 +308,16 @@ class Level:
       self.state = Level.State.PLAY
 
   def _do_use_operators(self, operators_str):
-    assert(self.state is Level.State.INIT)
-    self.state = Level.State.USE
+    if self.state is Level.State.INIT:
+      self.state = Level.State.USE
+    log('reset operators')
+    self.operators_in_use = OrderedDict()
 
     for word in operators_str.split(','):
       tokens = word.split(':')
       assert(len(tokens) < 3)
       name = tokens[0]
-      operator = dict(self.config["operators"][name])
+      operator = dict(self.config["operators"].get(name, {}))
       if len(tokens) == 1:
         operator['count'] = 1
       else:
@@ -323,7 +356,7 @@ class Level:
 
     idx, available = self._get_operator_panel_index(name)
     panel_x, panel_y = self.game_map.panel_to_coordinates(idx, available)
-    grid_x, grid_y = self.game_map.grid_to_coordinates(row, col)
+    grid_x, grid_y = self.game_map.distorted_grid_to_coordinates(row, col)
     Adb.tap(panel_x, panel_y)
     Adb.drag(panel_x, panel_y, grid_x, grid_y)
     if direction == 'up' or direction == 'u':
@@ -334,7 +367,7 @@ class Level:
       self.swipe_left(grid_x, grid_y)
     elif direction == 'right' or direction == 'r':
       self.swipe_right(grid_x, grid_y)
-    operator["coordinates"] = (grid_x, grid_y)
+    operator["coordinates"] = self.game_map.grid_to_coordinates(row, col)
     operator["count"] -= 1
 
   def _do_retreat(self, name):
@@ -390,12 +423,12 @@ class Level:
       self.paused = False
       if self.state is Level.State.PLAY:
         self.paused_duration_ms += self._monotonic_now_ms() - self.last_pause_time_ms
-      print("# resumed")
+      log("resumed")
     else:
       self.paused = True
       if self.state is Level.State.PLAY:
         self.last_pause_time_ms = self._monotonic_now_ms()
-      print("# paused")
+      log("paused")
 
   def may_pause(self):
     was_paused = self.paused
@@ -455,11 +488,8 @@ def main():
                       help='adb host', default=5555)
 
   args = parser.parse_args()
-  config = None
-  with open(args.config_path) as fd:
-    config = json.load(fd)
   Adb.connect(args.adb_host, args.adb_port)
-  level = Level(config)
+  level = Level(args)
   level.loop(args.input_path, args.output_path)
 
 
