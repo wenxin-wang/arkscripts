@@ -91,12 +91,12 @@ class Adb:
     Adb._do('adb shell input tap {} {}'.format(int(x), int(y)))
 
   @staticmethod
-  def drag(from_x, from_y, to_x, to_y, duration_ms=800):
+  def drag(from_x, from_y, to_x, to_y, duration_ms=1000):
     Adb._do('adb shell input draganddrop {} {} {} {} {}'
             .format(int(from_x), int(from_y), int(to_x), int(to_y), int(duration_ms)))
 
   @staticmethod
-  def swipe(from_x, from_y, to_x, to_y, duration_ms=800):
+  def swipe(from_x, from_y, to_x, to_y, duration_ms=1000):
     Adb._do('adb shell input swipe {} {} {} {} {}'
             .format(int(from_x), int(from_y), int(to_x), int(to_y), int(duration_ms)))
 
@@ -228,7 +228,8 @@ class Level:
     self.start_time_ms = self._monotonic_now_ms()
 
     for line in input_fd:
-      self._do_line(line.strip(), output_fd, interactive=False)
+      for l in line.strip().split(';'):
+        self._do_line(l.strip(), output_fd, interactive=False)
 
     assert(self.state is Level.State.PLAY)
 
@@ -237,8 +238,9 @@ class Level:
 
     log("next command:")
     for line in sys.stdin:
-      self._do_line(line.strip(), output_fd, interactive=True)
-      log("next command:")
+      for l in line.strip().split(';'):
+        self._do_line(l.strip(), output_fd, interactive=True)
+        log("next command:")
 
   def _do_line(self, line, output_fd, interactive):
     if not line:
@@ -254,6 +256,10 @@ class Level:
 
     tokens = line.split()
     was_paused = None
+    diff_ms = 0
+    if output_fd:
+      if self.state is Level.State.PLAY:
+        diff_ms = self._game_duration_ms()
     try:
       if tokens[0] == 'use':
         self._do_use_operators(*tokens[1:])
@@ -273,7 +279,6 @@ class Level:
         was_paused = self.may_pause()
         self._do_activate(*tokens[1:])
       elif tokens[0] == 'x':
-        was_paused = self.may_pause()
         self._do_recycle(*tokens[1:])
       elif tokens[0] == 'till':
         self._do_wait_till(*tokens[1:])
@@ -293,9 +298,8 @@ class Level:
       self.may_pause_again(was_paused)
       return
 
-    if output_fd:
+    if output_fd and interactive and tokens[0] != 'till':
       if self.state is Level.State.PLAY and not self.paused:
-        diff_ms = self._game_duration_ms()
         output_fd.write('till {}\n'.format(diff_ms))
       output_fd.write(' '.join(tokens) + '\n')
       output_fd.flush()
@@ -413,7 +417,7 @@ class Level:
       diff_ms -= sleep_ms
       try:
         time.sleep(sleep_ms * 0.001)
-      except e:
+      except Exception as e:
         self.toggle_pause()
         raise e
 
@@ -457,20 +461,23 @@ class Level:
     return round(time.monotonic() * 1000)
 
   def _game_duration_ms(self):
-    assert(not self.paused)
     assert(self.state is Level.State.PLAY)
-    return self._monotonic_now_ms() - self.start_time_ms - self.paused_duration_ms
+    now_ms = self._monotonic_now_ms()
+    dur_ms = now_ms - self.start_time_ms - self.paused_duration_ms
+    if self.paused:
+      return dur_ms - (now_ms - self.last_pause_time_ms)
+    return dur_ms
 
-  def swipe_up(self, x, y, dist=200, duration_ms=200):
+  def swipe_up(self, x, y, dist=200, duration_ms=500):
     Adb.swipe(x, y, x, max(0, y - dist), duration_ms)
 
-  def swipe_down(self, x, y, dist=200, duration_ms=200):
+  def swipe_down(self, x, y, dist=200, duration_ms=500):
     Adb.swipe(x, y, x, min(self.grid['height'], y + dist), duration_ms)
 
-  def swipe_left(self, x, y, dist=200, duration_ms=200):
+  def swipe_left(self, x, y, dist=200, duration_ms=500):
     Adb.swipe(x, y, max(0, x - dist), y, duration_ms)
 
-  def swipe_right(self, x, y, dist=200, duration_ms=200):
+  def swipe_right(self, x, y, dist=200, duration_ms=500):
     Adb.swipe(x, y, min(self.grid['width'], x + dist), y, duration_ms)
 
 
